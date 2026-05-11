@@ -1,0 +1,337 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+// © Multi-Timeframe CISD & FVG Indicator
+
+//@version=6
+indicator("MTF CISD & FVG [3 Timeframes]", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Timeframe Selection
+grpTF = "Timeframe Settings"
+tf1 = input.timeframe("5",   "Timeframe 1", group=grpTF)
+tf2 = input.timeframe("15",  "Timeframe 2", group=grpTF)
+tf3 = input.timeframe("60",  "Timeframe 3", group=grpTF)
+
+// FVG Settings
+grpFVG = "FVG Settings"
+showBullFVG = input.bool(true, "Show Bullish FVGs", group=grpFVG)
+showBearFVG = input.bool(true, "Show Bearish FVGs", group=grpFVG)
+fvgMaxBoxes = input.int(5, "Max FVGs Per Timeframe", minval=1, maxval=20, group=grpFVG)
+fvgExtend    = input.int(20, "FVG Extend (bars)", minval=1, maxval=100, group=grpFVG)
+fvgMitigated = input.bool(true, "Remove Mitigated FVGs", group=grpFVG)
+
+// CISD Settings
+grpCISD = "CISD Settings"
+showCISD = input.bool(true, "Show CISD Levels", group=grpCISD)
+cisdExtend = input.int(50, "CISD Extend (bars)", minval=5, maxval=200, group=grpCISD)
+
+// Color Settings
+grpColors = "Color Settings"
+tf1BullColor = input.color(color.new(color.green, 70), "TF1 Bullish", group=grpColors)
+tf1BearColor = input.color(color.new(color.red, 70),   "TF1 Bearish", group=grpColors)
+tf2BullColor = input.color(color.new(color.teal, 70),  "TF2 Bullish", group=grpColors)
+tf2BearColor = input.color(color.new(color.orange, 70),"TF2 Bearish", group=grpColors)
+tf3BullColor = input.color(color.new(color.blue, 70),  "TF3 Bullish", group=grpColors)
+tf3BearColor = input.color(color.new(color.purple, 70),"TF3 Bearish", group=grpColors)
+
+tf1CISDBullColor = input.color(color.new(color.green, 0),  "TF1 CISD Bull", group=grpColors)
+tf1CISDBearColor = input.color(color.new(color.red, 0),    "TF1 CISD Bear", group=grpColors)
+tf2CISDBullColor = input.color(color.new(color.teal, 0),   "TF2 CISD Bull", group=grpColors)
+tf2CISDBearColor = input.color(color.new(color.orange, 0), "TF2 CISD Bear", group=grpColors)
+tf3CISDBullColor = input.color(color.new(color.blue, 0),   "TF3 CISD Bull", group=grpColors)
+tf3CISDBearColor = input.color(color.new(color.purple, 0), "TF3 CISD Bear", group=grpColors)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FVG DETECTION LOGIC
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Type definitions
+type FVGData
+    float highVal
+    float lowVal
+    bool  isBull
+    int   startBar
+    bool  active
+
+type CISDData
+    float level
+    bool  isBull
+    int   startBar
+    bool  active
+
+// FVG Detection function - returns arrays of gap high/low
+bullFVG(float h, float l, float h1, float l1, float h2, float l2) =>
+    // Bullish FVG: candle[2] high < candle[0] low (gap up)
+    gap = l > h2
+    [gap, h2, l]
+
+bearFVG(float h, float l, float h1, float l1, float h2, float l2) =>
+    // Bearish FVG: candle[0] high < candle[2] low (gap down)
+    gap = h < l2
+    [gap, h, l2]
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CISD DETECTION LOGIC
+// Change in State of Delivery:
+// Bullish CISD: price closes above the previous swing high (delivery shifts bullish)
+// Bearish CISD: price closes below the previous swing low (delivery shifts bearish)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Swing detection
+swingHigh(float h, float h1, float h2) =>
+    h1 > h and h1 > h2
+
+swingLow(float l, float l1, float l2) =>
+    l1 < l and l1 < l2
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REQUEST MULTI-TIMEFRAME DATA
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TF1 Data
+[tf1Open, tf1High, tf1Low, tf1Close] = request.security(syminfo.tickerid, tf1, [open, high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+[tf1High1, tf1Low1, tf1Close1] = request.security(syminfo.tickerid, tf1, [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_off)
+[tf1High2, tf1Low2, tf1Close2] = request.security(syminfo.tickerid, tf1, [high[2], low[2], close[2]], barmerge.gaps_off, barmerge.lookahead_off)
+
+// TF2 Data
+[tf2Open, tf2High, tf2Low, tf2Close] = request.security(syminfo.tickerid, tf2, [open, high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+[tf2High1, tf2Low1, tf2Close1] = request.security(syminfo.tickerid, tf2, [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_off)
+[tf2High2, tf2Low2, tf2Close2] = request.security(syminfo.tickerid, tf2, [high[2], low[2], close[2]], barmerge.gaps_off, barmerge.lookahead_off)
+
+// TF3 Data
+[tf3Open, tf3High, tf3Low, tf3Close] = request.security(syminfo.tickerid, tf3, [open, high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+[tf3High1, tf3Low1, tf3Close1] = request.security(syminfo.tickerid, tf3, [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_off)
+[tf3High2, tf3Low2, tf3Close2] = request.security(syminfo.tickerid, tf3, [high[2], low[2], close[2]], barmerge.gaps_off, barmerge.lookahead_off)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FVG DETECTION PER TIMEFRAME
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TF1 FVGs
+[tf1BullGap, tf1BullBot, tf1BullTop] = bullFVG(tf1High, tf1Low, tf1High1, tf1Low1, tf1High2, tf1Low2)
+[tf1BearGap, tf1BearTop, tf1BearBot] = bearFVG(tf1High, tf1Low, tf1High1, tf1Low1, tf1High2, tf1Low2)
+
+// TF2 FVGs
+[tf2BullGap, tf2BullBot, tf2BullTop] = bullFVG(tf2High, tf2Low, tf2High1, tf2Low1, tf2High2, tf2Low2)
+[tf2BearGap, tf2BearTop, tf2BearBot] = bearFVG(tf2High, tf2Low, tf2High1, tf2Low1, tf2High2, tf2Low2)
+
+// TF3 FVGs
+[tf3BullGap, tf3BullBot, tf3BullTop] = bullFVG(tf3High, tf3Low, tf3High1, tf3Low1, tf3High2, tf3Low2)
+[tf3BearGap, tf3BearTop, tf3BearBot] = bearFVG(tf3High, tf3Low, tf3High1, tf3Low1, tf3High2, tf3Low2)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CISD DETECTION PER TIMEFRAME
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TF1 Swing Points
+tf1SwHigh = swingHigh(tf1High, tf1High1, tf1High2)
+tf1SwLow  = swingLow(tf1Low, tf1Low1, tf1Low2)
+
+// TF2 Swing Points
+tf2SwHigh = swingHigh(tf2High, tf2High1, tf2High2)
+tf2SwLow  = swingLow(tf2Low, tf2Low1, tf2Low2)
+
+// TF3 Swing Points
+tf3SwHigh = swingHigh(tf3High, tf3High1, tf3High2)
+tf3SwLow  = swingLow(tf3Low, tf3Low1, tf3Low2)
+
+// Track last swing highs/lows for CISD
+var float tf1LastSwHigh = na
+var float tf1LastSwLow  = na
+var float tf2LastSwHigh = na
+var float tf2LastSwLow  = na
+var float tf3LastSwHigh = na
+var float tf3LastSwLow  = na
+
+if tf1SwHigh
+    tf1LastSwHigh := tf1High1
+if tf1SwLow
+    tf1LastSwLow := tf1Low1
+if tf2SwHigh
+    tf2LastSwHigh := tf2High1
+if tf2SwLow
+    tf2LastSwLow := tf2Low1
+if tf3SwHigh
+    tf3LastSwHigh := tf3High1
+if tf3SwLow
+    tf3LastSwLow := tf3Low1
+
+// CISD Signals: close breaking above last swing high (bullish) or below last swing low (bearish)
+tf1CISDBull = not na(tf1LastSwHigh) and tf1Close > tf1LastSwHigh and tf1Close1 <= tf1LastSwHigh
+tf1CISDBear = not na(tf1LastSwLow)  and tf1Close < tf1LastSwLow  and tf1Close1 >= tf1LastSwLow
+
+tf2CISDBull = not na(tf2LastSwHigh) and tf2Close > tf2LastSwHigh and tf2Close1 <= tf2LastSwHigh
+tf2CISDBear = not na(tf2LastSwLow)  and tf2Close < tf2LastSwLow  and tf2Close1 >= tf2LastSwLow
+
+tf3CISDBull = not na(tf3LastSwHigh) and tf3Close > tf3LastSwHigh and tf3Close1 <= tf3LastSwHigh
+tf3CISDBear = not na(tf3LastSwLow)  and tf3Close < tf3LastSwLow  and tf3Close1 >= tf3LastSwLow
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FVG BOX MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Arrays to track FVG boxes for mitigation
+var array<box> tf1BullBoxes = array.new<box>()
+var array<box> tf1BearBoxes = array.new<box>()
+var array<box> tf2BullBoxes = array.new<box>()
+var array<box> tf2BearBoxes = array.new<box>()
+var array<box> tf3BullBoxes = array.new<box>()
+var array<box> tf3BearBoxes = array.new<box>()
+
+// Function to draw FVG box
+drawFVG(bool condition, float top, float bot, color bgColor, string tfLabel, array<box> boxArr, int maxBoxes) =>
+    if condition
+        b = box.new(bar_index - 2, top, bar_index + fvgExtend, bot, border_color=color.new(bgColor, 50), bgcolor=bgColor, text=tfLabel, text_size=size.tiny, text_color=color.new(bgColor, -30))
+        array.push(boxArr, b)
+        if array.size(boxArr) > maxBoxes
+            box.delete(array.shift(boxArr))
+
+// Function to check mitigation and remove boxes
+mitigateFVG(array<box> boxArr, float currentClose, bool isBull) =>
+    if fvgMitigated and array.size(boxArr) > 0
+        for i = array.size(boxArr) - 1 to 0
+            b = array.get(boxArr, i)
+            if not na(b)
+                bTop = box.get_top(b)
+                bBot = box.get_bottom(b)
+                mitigated = isBull ? currentClose < bBot : currentClose > bTop
+                if mitigated
+                    box.delete(b)
+                    array.remove(boxArr, i)
+
+// Draw TF1 FVGs
+if showBullFVG and tf1BullGap
+    drawFVG(true, tf1BullTop, tf1BullBot, tf1BullColor, "FVG " + tf1, tf1BullBoxes, fvgMaxBoxes)
+
+if showBearFVG and tf1BearGap
+    drawFVG(true, tf1BearBot, tf1BearTop, tf1BearColor, "FVG " + tf1, tf1BearBoxes, fvgMaxBoxes)
+
+// Draw TF2 FVGs
+if showBullFVG and tf2BullGap
+    drawFVG(true, tf2BullTop, tf2BullBot, tf2BullColor, "FVG " + tf2, tf2BullBoxes, fvgMaxBoxes)
+
+if showBearFVG and tf2BearGap
+    drawFVG(true, tf2BearBot, tf2BearTop, tf2BearColor, "FVG " + tf2, tf2BearBoxes, fvgMaxBoxes)
+
+// Draw TF3 FVGs
+if showBullFVG and tf3BullGap
+    drawFVG(true, tf3BullTop, tf3BullBot, tf3BullColor, "FVG " + tf3, tf3BullBoxes, fvgMaxBoxes)
+
+if showBearFVG and tf3BearGap
+    drawFVG(true, tf3BearBot, tf3BearTop, tf3BearColor, "FVG " + tf3, tf3BearBoxes, fvgMaxBoxes)
+
+// Mitigate FVGs
+mitigateFVG(tf1BullBoxes, close, true)
+mitigateFVG(tf1BearBoxes, close, false)
+mitigateFVG(tf2BullBoxes, close, true)
+mitigateFVG(tf2BearBoxes, close, false)
+mitigateFVG(tf3BullBoxes, close, true)
+mitigateFVG(tf3BearBoxes, close, false)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CISD LINE MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Arrays to track CISD lines
+var array<line> tf1CISDLines = array.new<line>()
+var array<line> tf2CISDLines = array.new<line>()
+var array<line> tf3CISDLines = array.new<line>()
+
+// Draw CISD level
+drawCISD(bool condition, float level, color lineColor, string tfLabel, array<line> lineArr, int maxLines) =>
+    if condition and showCISD
+        l = line.new(bar_index, level, bar_index + cisdExtend, level, color=lineColor, width=2, style=line.style_dashed)
+        label.new(bar_index, level, "CISD " + tfLabel, style=label.style_label_left, color=color.new(lineColor, 80), textcolor=lineColor, size=size.small)
+        array.push(lineArr, l)
+        if array.size(lineArr) > maxLines
+            line.delete(array.shift(lineArr))
+
+// TF1 CISD
+if tf1CISDBull
+    drawCISD(true, tf1LastSwHigh, tf1CISDBullColor, tf1 + " Bull", tf1CISDLines, 5)
+if tf1CISDBear
+    drawCISD(true, tf1LastSwLow, tf1CISDBearColor, tf1 + " Bear", tf1CISDLines, 5)
+
+// TF2 CISD
+if tf2CISDBull
+    drawCISD(true, tf2LastSwHigh, tf2CISDBullColor, tf2 + " Bull", tf2CISDLines, 5)
+if tf2CISDBear
+    drawCISD(true, tf2LastSwLow, tf2CISDBearColor, tf2 + " Bear", tf2CISDLines, 5)
+
+// TF3 CISD
+if tf3CISDBull
+    drawCISD(true, tf3LastSwHigh, tf3CISDBullColor, tf3 + " Bull", tf3CISDLines, 5)
+if tf3CISDBear
+    drawCISD(true, tf3LastSwLow, tf3CISDBearColor, tf3 + " Bear", tf3CISDLines, 5)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MULTI-TIMEFRAME CONFLUENCE TABLE
+// ─────────────────────────────────────────────────────────────────────────────
+
+var table mtfTable = table.new(position.top_right, 4, 4, bgcolor=color.new(color.black, 80), border_width=1, border_color=color.gray)
+
+if barstate.islast
+    // Headers
+    table.cell(mtfTable, 0, 0, "TF",    text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 1, 0, "FVG",   text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 2, 0, "CISD",  text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 3, 0, "Bias",  text_color=color.white, text_size=size.small)
+
+    // TF1 Row
+    tf1FVGStatus = tf1BullGap ? "Bull" : tf1BearGap ? "Bear" : "—"
+    tf1CISDStatus = tf1CISDBull ? "Bull" : tf1CISDBear ? "Bear" : "—"
+    tf1Bias = tf1Close > tf1Open ? "Bullish" : "Bearish"
+    tf1BiasColor = tf1Close > tf1Open ? color.green : color.red
+
+    table.cell(mtfTable, 0, 1, tf1,          text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 1, 1, tf1FVGStatus, text_color=tf1FVGStatus == "Bull" ? color.green : tf1FVGStatus == "Bear" ? color.red : color.gray, text_size=size.small)
+    table.cell(mtfTable, 2, 1, tf1CISDStatus,text_color=tf1CISDStatus == "Bull" ? color.green : tf1CISDStatus == "Bear" ? color.red : color.gray, text_size=size.small)
+    table.cell(mtfTable, 3, 1, tf1Bias,      text_color=tf1BiasColor, text_size=size.small)
+
+    // TF2 Row
+    tf2FVGStatus = tf2BullGap ? "Bull" : tf2BearGap ? "Bear" : "—"
+    tf2CISDStatus = tf2CISDBull ? "Bull" : tf2CISDBear ? "Bear" : "—"
+    tf2Bias = tf2Close > tf2Open ? "Bullish" : "Bearish"
+    tf2BiasColor = tf2Close > tf2Open ? color.green : color.red
+
+    table.cell(mtfTable, 0, 2, tf2,          text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 1, 2, tf2FVGStatus, text_color=tf2FVGStatus == "Bull" ? color.green : tf2FVGStatus == "Bear" ? color.red : color.gray, text_size=size.small)
+    table.cell(mtfTable, 2, 2, tf2CISDStatus,text_color=tf2CISDStatus == "Bull" ? color.green : tf2CISDStatus == "Bear" ? color.red : color.gray, text_size=size.small)
+    table.cell(mtfTable, 3, 2, tf2Bias,      text_color=tf2BiasColor, text_size=size.small)
+
+    // TF3 Row
+    tf3FVGStatus = tf3BullGap ? "Bull" : tf3BearGap ? "Bear" : "—"
+    tf3CISDStatus = tf3CISDBull ? "Bull" : tf3CISDBear ? "Bear" : "—"
+    tf3Bias = tf3Close > tf3Open ? "Bullish" : "Bearish"
+    tf3BiasColor = tf3Close > tf3Open ? color.green : color.red
+
+    table.cell(mtfTable, 0, 3, tf3,          text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 1, 3, tf3FVGStatus, text_color=tf3FVGStatus == "Bull" ? color.green : tf3FVGStatus == "Bear" ? color.red : color.gray, text_size=size.small)
+    table.cell(mtfTable, 2, 3, tf3CISDStatus,text_color=tf3CISDStatus == "Bull" ? color.green : tf3CISDStatus == "Bear" ? color.red : color.gray, text_size=size.small)
+    table.cell(mtfTable, 3, 3, tf3Bias,      text_color=tf3BiasColor, text_size=size.small)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALERTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Multi-TF Confluence alerts
+allBullCISD = tf1CISDBull and tf2CISDBull and tf3CISDBull
+allBearCISD = tf1CISDBear and tf2CISDBear and tf3CISDBear
+
+alertcondition(allBullCISD, "All TFs Bullish CISD", "Bullish CISD confirmed on all 3 timeframes")
+alertcondition(allBearCISD, "All TFs Bearish CISD", "Bearish CISD confirmed on all 3 timeframes")
+alertcondition(tf1BullGap or tf2BullGap or tf3BullGap, "Bullish FVG (Any TF)", "Bullish FVG detected")
+alertcondition(tf1BearGap or tf2BearGap or tf3BearGap, "Bearish FVG (Any TF)", "Bearish FVG detected")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BACKGROUND HIGHLIGHT ON MULTI-TF CONFLUENCE
+// ─────────────────────────────────────────────────────────────────────────────
+
+anyBullConfluence = (tf1CISDBull and tf2CISDBull) or (tf2CISDBull and tf3CISDBull) or (tf1CISDBull and tf3CISDBull)
+anyBearConfluence = (tf1CISDBear and tf2CISDBear) or (tf2CISDBear and tf3CISDBear) or (tf1CISDBear and tf3CISDBear)
+
+bgcolor(anyBullConfluence ? color.new(color.green, 92) : na, title="Multi-TF Bull Confluence")
+bgcolor(anyBearConfluence ? color.new(color.red, 92) : na, title="Multi-TF Bear Confluence")
