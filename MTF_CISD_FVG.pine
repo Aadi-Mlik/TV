@@ -1,41 +1,103 @@
 // This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
 // https://mozilla.org/MPL/2.0/
-// © Multi-Timeframe CISD & FVG Indicator
+// © Multi-Timeframe CISD & FVG + Volume Bubbles Indicator
 
 //@version=6
-indicator("MTF CISD & FVG [3 Timeframes]", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+indicator("MTF CISD & FVG + Volume Bubbles", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+import TradingView/ta/12 as taLib
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INPUTS
+// INPUTS — TIMEFRAMES
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Timeframe Selection
-grpTF = "Timeframe Settings"
+grpTF = "════════ Timeframe Settings ════════"
 tf1 = input.timeframe("5",   "Timeframe 1", group=grpTF)
 tf2 = input.timeframe("15",  "Timeframe 2", group=grpTF)
 tf3 = input.timeframe("60",  "Timeframe 3", group=grpTF)
 
-// FVG Settings
-grpFVG = "FVG Settings"
-showBullFVG = input.bool(true, "Show Bullish FVGs", group=grpFVG)
-showBearFVG = input.bool(true, "Show Bearish FVGs", group=grpFVG)
-fvgMaxBoxes = input.int(5, "Max FVGs Per Timeframe", minval=1, maxval=20, group=grpFVG)
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS — FVG
+// ─────────────────────────────────────────────────────────────────────────────
+
+grpFVG = "════════ FVG Settings ════════"
+showBullFVG  = input.bool(true, "Show Bullish FVGs", group=grpFVG)
+showBearFVG  = input.bool(true, "Show Bearish FVGs", group=grpFVG)
+fvgMaxBoxes  = input.int(5, "Max FVGs Per Timeframe", minval=1, maxval=20, group=grpFVG)
 fvgExtend    = input.int(20, "FVG Extend (bars)", minval=1, maxval=100, group=grpFVG)
 fvgMitigated = input.bool(true, "Remove Mitigated FVGs", group=grpFVG)
 
-// CISD Settings
-grpCISD = "CISD Settings"
-showCISD = input.bool(true, "Show CISD Levels", group=grpCISD)
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS — CISD
+// ─────────────────────────────────────────────────────────────────────────────
+
+grpCISD = "════════ CISD Settings ════════"
+showCISD   = input.bool(true, "Show CISD Levels", group=grpCISD)
 cisdExtend = input.int(50, "CISD Extend (bars)", minval=5, maxval=200, group=grpCISD)
 
-// Color Settings
-grpColors = "Color Settings"
-tf1BullColor = input.color(color.new(color.green, 70), "TF1 Bullish", group=grpColors)
-tf1BearColor = input.color(color.new(color.red, 70),   "TF1 Bearish", group=grpColors)
-tf2BullColor = input.color(color.new(color.teal, 70),  "TF2 Bullish", group=grpColors)
-tf2BearColor = input.color(color.new(color.orange, 70),"TF2 Bearish", group=grpColors)
-tf3BullColor = input.color(color.new(color.blue, 70),  "TF3 Bullish", group=grpColors)
-tf3BearColor = input.color(color.new(color.purple, 70),"TF3 Bearish", group=grpColors)
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS — VOLUME BUBBLES DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+grpVBDetect = "════════ Volume Detection Method ════════"
+detectMethod = input.string("Volume OR Delta", "Detection Method",
+     options = ["Volume Only", "Delta Only", "Volume + Delta", "Volume OR Delta"], group=grpVBDetect,
+     tooltip = "Volume Only: raw bar volume.\nDelta Only: net buy-sell pressure from LTF.\nVolume + Delta: both must exceed thresholds.\nVolume OR Delta: either triggers a cluster.")
+classifyMode = input.string("Both", "Buy/Sell Classification",
+     options = ["Candle Direction", "Delta Direction", "Both"], group=grpVBDetect,
+     tooltip = "Candle Direction: candle color.\nDelta Direction: sign of net delta.\nBoth: both must agree or Mixed.")
+
+grpVBDelta = "════════ Volume Delta Settings ════════"
+useCustomTF = input.bool(false,    "Use Custom Lower Timeframe", group=grpVBDelta)
+customTF    = input.timeframe("1", "Custom Timeframe",           group=grpVBDelta)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS — VOLUME SENSITIVITY & CONSENSUS
+// ─────────────────────────────────────────────────────────────────────────────
+
+grpVBSens = "════════ Cluster Sensitivity ════════"
+smallPct  = input.float(75, "Small Cluster Percentile",  step=1, group=grpVBSens)
+mediumPct = input.float(90, "Medium Cluster Percentile", step=1, group=grpVBSens)
+bigPct    = input.float(97, "Big Cluster Percentile",    step=1, group=grpVBSens)
+
+grpVBCons = "════════ Lookback & Consensus ════════"
+consensusMode = input.string("Majority (2 of 3)", "Consensus Mode",
+     options=["Any Window", "Majority (2 of 3)", "All Windows (strictest)"], group=grpVBCons)
+shortLen = input.int(20,  "Short Window",  group=grpVBCons)
+midLen   = input.int(50,  "Medium Window", group=grpVBCons)
+longLen  = input.int(100, "Long Window",   group=grpVBCons)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS — VOLUME VISUALIZATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+grpVBVis = "════════ Volume Bubble Visualization ════════"
+showVolBubbles = input.bool(true, "Show Volume Bubbles", group=grpVBVis)
+showSmall      = input.bool(true, "Show Small Clusters", group=grpVBVis)
+showMedium     = input.bool(true, "Show Medium Clusters", group=grpVBVis)
+showBig        = input.bool(true, "Show Big Clusters", group=grpVBVis)
+
+colorPreset = input.string("Classic", "Color Preset",
+     options=["Classic", "Aqua", "Cosmic", "Cyber", "Neon", "Custom"], group=grpVBVis)
+buyColorInput  = input.color(color.new(#00ffaa, 40), "Buy Color",   group=grpVBVis)
+sellColorInput = input.color(color.new(#ff0000, 20), "Sell Color",  group=grpVBVis)
+mixColorInput  = input.color(color.new(#ffd600, 30), "Mixed Color", group=grpVBVis)
+
+showBubbleLabels = input.bool(true, "Show Numbers in Bubbles", group=grpVBVis)
+labelContent = input.string("Volume", "Bubble Text",
+     options=["Volume", "Delta", "Ratio", "Vol + Delta", "Vol + Ratio"], group=grpVBVis)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS — COLORS (CISD/FVG)
+// ─────────────────────────────────────────────────────────────────────────────
+
+grpColors = "════════ CISD/FVG Colors ════════"
+tf1BullColor = input.color(color.new(color.green, 70), "TF1 Bullish FVG", group=grpColors)
+tf1BearColor = input.color(color.new(color.red, 70),   "TF1 Bearish FVG", group=grpColors)
+tf2BullColor = input.color(color.new(color.teal, 70),  "TF2 Bullish FVG", group=grpColors)
+tf2BearColor = input.color(color.new(color.orange, 70),"TF2 Bearish FVG", group=grpColors)
+tf3BullColor = input.color(color.new(color.blue, 70),  "TF3 Bullish FVG", group=grpColors)
+tf3BearColor = input.color(color.new(color.purple, 70),"TF3 Bearish FVG", group=grpColors)
 
 tf1CISDBullColor = input.color(color.new(color.green, 0),  "TF1 CISD Bull", group=grpColors)
 tf1CISDBearColor = input.color(color.new(color.red, 0),    "TF1 CISD Bear", group=grpColors)
@@ -44,43 +106,40 @@ tf2CISDBearColor = input.color(color.new(color.orange, 0), "TF2 CISD Bear", grou
 tf3CISDBullColor = input.color(color.new(color.blue, 0),   "TF3 CISD Bull", group=grpColors)
 tf3CISDBearColor = input.color(color.new(color.purple, 0), "TF3 CISD Bear", group=grpColors)
 
+
+
 // ─────────────────────────────────────────────────────────────────────────────
-// FVG DETECTION LOGIC
+// VOLUME BUBBLE COLOR PRESETS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Type definitions
-type FVGData
-    float highVal
-    float lowVal
-    bool  isBull
-    int   startBar
-    bool  active
+[presetBuy, presetSell, presetMix] = switch colorPreset
+    "Classic" => [color.new(#00ff00, 40), color.new(#ff0000, 20), color.new(#ffd600, 30)]
+    "Aqua"    => [color.new(#00bfff, 40), color.new(#ff8c00, 20), color.new(#9932cc, 30)]
+    "Cosmic"  => [color.new(#49ffce, 40), color.new(#9932cc, 20), color.new(#ffd600, 30)]
+    "Cyber"   => [color.new(#00cccc, 20), color.new(#ff6600, 40), color.new(#ffd600, 30)]
+    "Neon"    => [color.new(#ffff00, 40), color.new(#ff00ff, 20), color.new(#9932cc, 30)]
+    "Custom"  => [buyColorInput, sellColorInput, mixColorInput]
 
-type CISDData
-    float level
-    bool  isBull
-    int   startBar
-    bool  active
+color buyColor  = presetBuy
+color sellColor = presetSell
+color mixColor  = presetMix
 
-// FVG Detection function - returns arrays of gap high/low
+// ─────────────────────────────────────────────────────────────────────────────
+// FVG DETECTION FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
 bullFVG(float h, float l, float h1, float l1, float h2, float l2) =>
-    // Bullish FVG: candle[2] high < candle[0] low (gap up)
     gap = l > h2
     [gap, h2, l]
 
 bearFVG(float h, float l, float h1, float l1, float h2, float l2) =>
-    // Bearish FVG: candle[0] high < candle[2] low (gap down)
     gap = h < l2
     [gap, h, l2]
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CISD DETECTION LOGIC
-// Change in State of Delivery:
-// Bullish CISD: price closes above the previous swing high (delivery shifts bullish)
-// Bearish CISD: price closes below the previous swing low (delivery shifts bearish)
+// CISD DETECTION FUNCTIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Swing detection
 swingHigh(float h, float h1, float h2) =>
     h1 > h and h1 > h2
 
@@ -88,7 +147,7 @@ swingLow(float l, float l1, float l2) =>
     l1 < l and l1 < l2
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REQUEST MULTI-TIMEFRAME DATA
+// MULTI-TIMEFRAME DATA REQUESTS
 // ─────────────────────────────────────────────────────────────────────────────
 
 // TF1 Data
@@ -110,15 +169,12 @@ swingLow(float l, float l1, float l2) =>
 // FVG DETECTION PER TIMEFRAME
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TF1 FVGs
 [tf1BullGap, tf1BullBot, tf1BullTop] = bullFVG(tf1High, tf1Low, tf1High1, tf1Low1, tf1High2, tf1Low2)
 [tf1BearGap, tf1BearTop, tf1BearBot] = bearFVG(tf1High, tf1Low, tf1High1, tf1Low1, tf1High2, tf1Low2)
 
-// TF2 FVGs
 [tf2BullGap, tf2BullBot, tf2BullTop] = bullFVG(tf2High, tf2Low, tf2High1, tf2Low1, tf2High2, tf2Low2)
 [tf2BearGap, tf2BearTop, tf2BearBot] = bearFVG(tf2High, tf2Low, tf2High1, tf2Low1, tf2High2, tf2Low2)
 
-// TF3 FVGs
 [tf3BullGap, tf3BullBot, tf3BullTop] = bullFVG(tf3High, tf3Low, tf3High1, tf3Low1, tf3High2, tf3Low2)
 [tf3BearGap, tf3BearTop, tf3BearBot] = bearFVG(tf3High, tf3Low, tf3High1, tf3Low1, tf3High2, tf3Low2)
 
@@ -126,19 +182,13 @@ swingLow(float l, float l1, float l2) =>
 // CISD DETECTION PER TIMEFRAME
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TF1 Swing Points
 tf1SwHigh = swingHigh(tf1High, tf1High1, tf1High2)
 tf1SwLow  = swingLow(tf1Low, tf1Low1, tf1Low2)
-
-// TF2 Swing Points
 tf2SwHigh = swingHigh(tf2High, tf2High1, tf2High2)
 tf2SwLow  = swingLow(tf2Low, tf2Low1, tf2Low2)
-
-// TF3 Swing Points
 tf3SwHigh = swingHigh(tf3High, tf3High1, tf3High2)
 tf3SwLow  = swingLow(tf3Low, tf3Low1, tf3Low2)
 
-// Track last swing highs/lows for CISD
 var float tf1LastSwHigh = na
 var float tf1LastSwLow  = na
 var float tf2LastSwHigh = na
@@ -159,21 +209,19 @@ if tf3SwHigh
 if tf3SwLow
     tf3LastSwLow := tf3Low1
 
-// CISD Signals: close breaking above last swing high (bullish) or below last swing low (bearish)
 tf1CISDBull = not na(tf1LastSwHigh) and tf1Close > tf1LastSwHigh and tf1Close1 <= tf1LastSwHigh
 tf1CISDBear = not na(tf1LastSwLow)  and tf1Close < tf1LastSwLow  and tf1Close1 >= tf1LastSwLow
-
 tf2CISDBull = not na(tf2LastSwHigh) and tf2Close > tf2LastSwHigh and tf2Close1 <= tf2LastSwHigh
 tf2CISDBear = not na(tf2LastSwLow)  and tf2Close < tf2LastSwLow  and tf2Close1 >= tf2LastSwLow
-
 tf3CISDBull = not na(tf3LastSwHigh) and tf3Close > tf3LastSwHigh and tf3Close1 <= tf3LastSwHigh
 tf3CISDBear = not na(tf3LastSwLow)  and tf3Close < tf3LastSwLow  and tf3Close1 >= tf3LastSwLow
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FVG BOX MANAGEMENT
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Arrays to track FVG boxes for mitigation
 var array<box> tf1BullBoxes = array.new<box>()
 var array<box> tf1BearBoxes = array.new<box>()
 var array<box> tf2BullBoxes = array.new<box>()
@@ -181,7 +229,6 @@ var array<box> tf2BearBoxes = array.new<box>()
 var array<box> tf3BullBoxes = array.new<box>()
 var array<box> tf3BearBoxes = array.new<box>()
 
-// Function to draw FVG box
 drawFVG(bool condition, float top, float bot, color bgColor, string tfLabel, array<box> boxArr, int maxBoxes) =>
     if condition
         b = box.new(bar_index - 2, top, bar_index + fvgExtend, bot, border_color=color.new(bgColor, 50), bgcolor=bgColor, text=tfLabel, text_size=size.tiny, text_color=color.new(bgColor, -30))
@@ -189,7 +236,6 @@ drawFVG(bool condition, float top, float bot, color bgColor, string tfLabel, arr
         if array.size(boxArr) > maxBoxes
             box.delete(array.shift(boxArr))
 
-// Function to check mitigation and remove boxes
 mitigateFVG(array<box> boxArr, float currentClose, bool isBull) =>
     if fvgMitigated and array.size(boxArr) > 0
         for i = array.size(boxArr) - 1 to 0
@@ -205,21 +251,18 @@ mitigateFVG(array<box> boxArr, float currentClose, bool isBull) =>
 // Draw TF1 FVGs
 if showBullFVG and tf1BullGap
     drawFVG(true, tf1BullTop, tf1BullBot, tf1BullColor, "FVG " + tf1, tf1BullBoxes, fvgMaxBoxes)
-
 if showBearFVG and tf1BearGap
     drawFVG(true, tf1BearBot, tf1BearTop, tf1BearColor, "FVG " + tf1, tf1BearBoxes, fvgMaxBoxes)
 
 // Draw TF2 FVGs
 if showBullFVG and tf2BullGap
     drawFVG(true, tf2BullTop, tf2BullBot, tf2BullColor, "FVG " + tf2, tf2BullBoxes, fvgMaxBoxes)
-
 if showBearFVG and tf2BearGap
     drawFVG(true, tf2BearBot, tf2BearTop, tf2BearColor, "FVG " + tf2, tf2BearBoxes, fvgMaxBoxes)
 
 // Draw TF3 FVGs
 if showBullFVG and tf3BullGap
     drawFVG(true, tf3BullTop, tf3BullBot, tf3BullColor, "FVG " + tf3, tf3BullBoxes, fvgMaxBoxes)
-
 if showBearFVG and tf3BearGap
     drawFVG(true, tf3BearBot, tf3BearTop, tf3BearColor, "FVG " + tf3, tf3BearBoxes, fvgMaxBoxes)
 
@@ -235,12 +278,10 @@ mitigateFVG(tf3BearBoxes, close, false)
 // CISD LINE MANAGEMENT
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Arrays to track CISD lines
 var array<line> tf1CISDLines = array.new<line>()
 var array<line> tf2CISDLines = array.new<line>()
 var array<line> tf3CISDLines = array.new<line>()
 
-// Draw CISD level
 drawCISD(bool condition, float level, color lineColor, string tfLabel, array<line> lineArr, int maxLines) =>
     if condition and showCISD
         l = line.new(bar_index, level, bar_index + cisdExtend, level, color=lineColor, width=2, style=line.style_dashed)
@@ -249,82 +290,230 @@ drawCISD(bool condition, float level, color lineColor, string tfLabel, array<lin
         if array.size(lineArr) > maxLines
             line.delete(array.shift(lineArr))
 
-// TF1 CISD
 if tf1CISDBull
     drawCISD(true, tf1LastSwHigh, tf1CISDBullColor, tf1 + " Bull", tf1CISDLines, 5)
 if tf1CISDBear
     drawCISD(true, tf1LastSwLow, tf1CISDBearColor, tf1 + " Bear", tf1CISDLines, 5)
-
-// TF2 CISD
 if tf2CISDBull
     drawCISD(true, tf2LastSwHigh, tf2CISDBullColor, tf2 + " Bull", tf2CISDLines, 5)
 if tf2CISDBear
     drawCISD(true, tf2LastSwLow, tf2CISDBearColor, tf2 + " Bear", tf2CISDLines, 5)
-
-// TF3 CISD
 if tf3CISDBull
     drawCISD(true, tf3LastSwHigh, tf3CISDBullColor, tf3 + " Bull", tf3CISDLines, 5)
 if tf3CISDBear
     drawCISD(true, tf3LastSwLow, tf3CISDBearColor, tf3 + " Bear", tf3CISDLines, 5)
 
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VOLUME DELTA CALCULATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+var string lowerTimeframe = switch
+    useCustomTF          => customTF
+    timeframe.isseconds  => "1S"
+    timeframe.isintraday => "1"
+    timeframe.isdaily    => "5"
+    => "60"
+
+[_, _, _, lastDelta] = taLib.requestVolumeDelta(lowerTimeframe)
+bool  deltaAvailable = not na(lastDelta)
+float netDelta = nz(lastDelta)
+float absDelta = math.abs(netDelta)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PERCENTILE THRESHOLDS
+// ─────────────────────────────────────────────────────────────────────────────
+
+float vSmallShort = ta.percentile_linear_interpolation(volume, shortLen, smallPct)
+float vSmallMid   = ta.percentile_linear_interpolation(volume, midLen,   smallPct)
+float vSmallLong  = ta.percentile_linear_interpolation(volume, longLen,  smallPct)
+float vMedShort   = ta.percentile_linear_interpolation(volume, shortLen, mediumPct)
+float vMedMid     = ta.percentile_linear_interpolation(volume, midLen,   mediumPct)
+float vMedLong    = ta.percentile_linear_interpolation(volume, longLen,  mediumPct)
+float vBigShort   = ta.percentile_linear_interpolation(volume, shortLen, bigPct)
+float vBigMid     = ta.percentile_linear_interpolation(volume, midLen,   bigPct)
+float vBigLong    = ta.percentile_linear_interpolation(volume, longLen,  bigPct)
+
+float dSmallShort = ta.percentile_linear_interpolation(absDelta, shortLen, smallPct)
+float dSmallMid   = ta.percentile_linear_interpolation(absDelta, midLen,   smallPct)
+float dSmallLong  = ta.percentile_linear_interpolation(absDelta, longLen,  smallPct)
+float dMedShort   = ta.percentile_linear_interpolation(absDelta, shortLen, mediumPct)
+float dMedMid     = ta.percentile_linear_interpolation(absDelta, midLen,   mediumPct)
+float dMedLong    = ta.percentile_linear_interpolation(absDelta, longLen,  mediumPct)
+float dBigShort   = ta.percentile_linear_interpolation(absDelta, shortLen, bigPct)
+float dBigMid     = ta.percentile_linear_interpolation(absDelta, midLen,   bigPct)
+float dBigLong    = ta.percentile_linear_interpolation(absDelta, longLen,  bigPct)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSENSUS DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+f_consensus(bool pS, bool pM, bool pL, string mode) =>
+    int hits = (pS ? 1 : 0) + (pM ? 1 : 0) + (pL ? 1 : 0)
+    switch mode
+        "Any Window"               => hits >= 1
+        "Majority (2 of 3)"       => hits >= 2
+        "All Windows (strictest)" => hits >= 3
+
+bool volBig   = f_consensus(volume >= vBigShort, volume >= vBigMid, volume >= vBigLong, consensusMode)
+bool volMed   = not volBig and f_consensus(volume >= vMedShort, volume >= vMedMid, volume >= vMedLong, consensusMode)
+bool volSmall = not volBig and not volMed and f_consensus(volume >= vSmallShort, volume >= vSmallMid, volume >= vSmallLong, consensusMode)
+
+bool deltaBig   = f_consensus(absDelta >= dBigShort, absDelta >= dBigMid, absDelta >= dBigLong, consensusMode)
+bool deltaMed   = not deltaBig and f_consensus(absDelta >= dMedShort, absDelta >= dMedMid, absDelta >= dMedLong, consensusMode)
+bool deltaSmall = not deltaBig and not deltaMed and f_consensus(absDelta >= dSmallShort, absDelta >= dSmallMid, absDelta >= dSmallLong, consensusMode)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMBINED VOLUME DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+f_detect(bool vHit, bool dHit, string method) =>
+    switch method
+        "Volume Only"      => vHit
+        "Delta Only"       => dHit
+        "Volume + Delta"   => vHit and dHit
+        "Volume OR Delta"  => vHit or dHit
+
+string effectiveMethod = deltaAvailable ? detectMethod : "Volume Only"
+
+bool isBigCluster   = f_detect(volBig, deltaBig, effectiveMethod)
+bool isMedCluster   = not isBigCluster and f_detect(volMed or volBig, deltaMed or deltaBig, effectiveMethod)
+bool isSmallCluster = not isBigCluster and not isMedCluster and f_detect(volSmall or volMed or volBig, deltaSmall or deltaMed or deltaBig, effectiveMethod)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BUY/SELL CLASSIFICATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+bool candleBuy  = close >= open
+bool candleSell = close < open
+
+bool isBuy = switch classifyMode
+    "Candle Direction"  => candleBuy
+    "Delta Direction"   => deltaAvailable ? netDelta > 0 : candleBuy
+    "Both"              => deltaAvailable ? (candleBuy and netDelta > 0) : candleBuy
+
+bool isSell = switch classifyMode
+    "Candle Direction"  => candleSell
+    "Delta Direction"   => deltaAvailable ? netDelta < 0 : candleSell
+    "Both"              => deltaAvailable ? (candleSell and netDelta < 0) : candleSell
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VOLUME BUBBLE FORMATTING & VISUALIZATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+f_formatNum(float v) =>
+    float av = math.abs(v)
+    string sign = v < 0 ? "-" : ""
+    av >= 1000000000 ? sign + str.tostring(av / 1000000000, "#.##") + "B" :
+     av >= 1000000   ? sign + str.tostring(av / 1000000, "#.##") + "M" :
+     av >= 1000      ? sign + str.tostring(av / 1000, "#.##") + "K" :
+     sign + str.tostring(av, "#")
+
+float avgVol   = ta.sma(volume, midLen)
+float volRatio = avgVol > 0 ? volume / avgVol : 0.0
+
+bool isSmallVisible = isSmallCluster and showSmall and showVolBubbles
+bool isMedVisible   = isMedCluster and showMedium and showVolBubbles
+bool isBigVisible   = isBigCluster and showBig and showVolBubbles
+bool isAnyVisible   = isSmallVisible or isMedVisible or isBigVisible
+
+float bubbleY     = isAnyVisible ? (isSell ? high : low) : na
+color bubbleColor = isBuy ? buyColor : isSell ? sellColor : mixColor
+
+plotshape(isSmallVisible ? bubbleY : na, "Small Vol", shape.circle, location.absolute, bubbleColor, 0, "", na, size=size.normal)
+plotshape(isMedVisible   ? bubbleY : na, "Med Vol",   shape.circle, location.absolute, bubbleColor, 0, "", na, size=size.large)
+plotshape(isBigVisible   ? bubbleY : na, "Big Vol",   shape.circle, location.absolute, bubbleColor, 0, "", na, size=size.huge)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VOLUME BUBBLE TEXT OVERLAY
+// ─────────────────────────────────────────────────────────────────────────────
+
+if isAnyVisible and showBubbleLabels
+    string fv = f_formatNum(volume)
+    string fd = f_formatNum(netDelta)
+    string rx = str.tostring(volRatio, "#.#") + "x"
+
+    string bubbleText = switch labelContent
+        "Volume"      => fv
+        "Delta"       => deltaAvailable ? fd : fv
+        "Ratio"       => rx
+        "Vol + Delta" => deltaAvailable ? fv + "\n" + fd : fv
+        "Vol + Ratio" => fv + "\n" + rx
+
+    int cLevel      = isBigVisible ? 3 : isMedVisible ? 2 : 1
+    string levelTag = cLevel == 3 ? "BIG" : cLevel == 2 ? "MEDIUM" : "SMALL"
+    string sideTag  = isBuy ? "BUY" : isSell ? "SELL" : "MIXED"
+
+    string tip = "── " + levelTag + " " + sideTag + " ──" +
+         "\nVolume: " + fv +
+         "\nDelta: " + (deltaAvailable ? fd : "n/a") +
+         "\nRatio: " + str.tostring(volRatio, "#.##") + "x" +
+         "\nMethod: " + detectMethod +
+         "\nClassification: " + classifyMode
+
+    label.new(bar_index, bubbleY, bubbleText,
+         style=label.style_label_center,
+         color=color.new(chart.fg_color, 100),
+         textcolor=chart.fg_color,
+         size=size.small,
+         tooltip=tip)
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MULTI-TIMEFRAME CONFLUENCE TABLE
 // ─────────────────────────────────────────────────────────────────────────────
 
-var table mtfTable = table.new(position.top_right, 4, 4, bgcolor=color.new(color.black, 80), border_width=1, border_color=color.gray)
+var table mtfTable = table.new(position.top_right, 5, 4, bgcolor=color.new(color.black, 80), border_width=1, border_color=color.gray)
 
 if barstate.islast
     // Headers
-    table.cell(mtfTable, 0, 0, "TF",    text_color=color.white, text_size=size.small)
-    table.cell(mtfTable, 1, 0, "FVG",   text_color=color.white, text_size=size.small)
-    table.cell(mtfTable, 2, 0, "CISD",  text_color=color.white, text_size=size.small)
-    table.cell(mtfTable, 3, 0, "Bias",  text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 0, 0, "TF",     text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 1, 0, "FVG",    text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 2, 0, "CISD",   text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 3, 0, "Bias",   text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 4, 0, "Vol",    text_color=color.white, text_size=size.small)
+
+    // Volume cluster status for table
+    string volStatus = isBigCluster ? "BIG" : isMedCluster ? "MED" : isSmallCluster ? "SML" : "—"
+    color  volClr    = isBigCluster ? color.yellow : isMedCluster ? color.orange : isSmallCluster ? color.gray : color.gray
 
     // TF1 Row
-    tf1FVGStatus = tf1BullGap ? "Bull" : tf1BearGap ? "Bear" : "—"
+    tf1FVGStatus  = tf1BullGap ? "Bull" : tf1BearGap ? "Bear" : "—"
     tf1CISDStatus = tf1CISDBull ? "Bull" : tf1CISDBear ? "Bear" : "—"
-    tf1Bias = tf1Close > tf1Open ? "Bullish" : "Bearish"
-    tf1BiasColor = tf1Close > tf1Open ? color.green : color.red
+    tf1Bias       = tf1Close > tf1Open ? "Bullish" : "Bearish"
+    tf1BiasColor  = tf1Close > tf1Open ? color.green : color.red
 
-    table.cell(mtfTable, 0, 1, tf1,          text_color=color.white, text_size=size.small)
-    table.cell(mtfTable, 1, 1, tf1FVGStatus, text_color=tf1FVGStatus == "Bull" ? color.green : tf1FVGStatus == "Bear" ? color.red : color.gray, text_size=size.small)
-    table.cell(mtfTable, 2, 1, tf1CISDStatus,text_color=tf1CISDStatus == "Bull" ? color.green : tf1CISDStatus == "Bear" ? color.red : color.gray, text_size=size.small)
-    table.cell(mtfTable, 3, 1, tf1Bias,      text_color=tf1BiasColor, text_size=size.small)
+    table.cell(mtfTable, 0, 1, tf1,           text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 1, 1, tf1FVGStatus,  text_color=tf1FVGStatus == "Bull" ? color.green : tf1FVGStatus == "Bear" ? color.red : color.gray, text_size=size.small)
+    table.cell(mtfTable, 2, 1, tf1CISDStatus, text_color=tf1CISDStatus == "Bull" ? color.green : tf1CISDStatus == "Bear" ? color.red : color.gray, text_size=size.small)
+    table.cell(mtfTable, 3, 1, tf1Bias,       text_color=tf1BiasColor, text_size=size.small)
+    table.cell(mtfTable, 4, 1, volStatus,     text_color=volClr, text_size=size.small)
 
     // TF2 Row
-    tf2FVGStatus = tf2BullGap ? "Bull" : tf2BearGap ? "Bear" : "—"
+    tf2FVGStatus  = tf2BullGap ? "Bull" : tf2BearGap ? "Bear" : "—"
     tf2CISDStatus = tf2CISDBull ? "Bull" : tf2CISDBear ? "Bear" : "—"
-    tf2Bias = tf2Close > tf2Open ? "Bullish" : "Bearish"
-    tf2BiasColor = tf2Close > tf2Open ? color.green : color.red
+    tf2Bias       = tf2Close > tf2Open ? "Bullish" : "Bearish"
+    tf2BiasColor  = tf2Close > tf2Open ? color.green : color.red
 
-    table.cell(mtfTable, 0, 2, tf2,          text_color=color.white, text_size=size.small)
-    table.cell(mtfTable, 1, 2, tf2FVGStatus, text_color=tf2FVGStatus == "Bull" ? color.green : tf2FVGStatus == "Bear" ? color.red : color.gray, text_size=size.small)
-    table.cell(mtfTable, 2, 2, tf2CISDStatus,text_color=tf2CISDStatus == "Bull" ? color.green : tf2CISDStatus == "Bear" ? color.red : color.gray, text_size=size.small)
-    table.cell(mtfTable, 3, 2, tf2Bias,      text_color=tf2BiasColor, text_size=size.small)
+    table.cell(mtfTable, 0, 2, tf2,           text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 1, 2, tf2FVGStatus,  text_color=tf2FVGStatus == "Bull" ? color.green : tf2FVGStatus == "Bear" ? color.red : color.gray, text_size=size.small)
+    table.cell(mtfTable, 2, 2, tf2CISDStatus, text_color=tf2CISDStatus == "Bull" ? color.green : tf2CISDStatus == "Bear" ? color.red : color.gray, text_size=size.small)
+    table.cell(mtfTable, 3, 2, tf2Bias,       text_color=tf2BiasColor, text_size=size.small)
+    table.cell(mtfTable, 4, 2, volStatus,     text_color=volClr, text_size=size.small)
 
     // TF3 Row
-    tf3FVGStatus = tf3BullGap ? "Bull" : tf3BearGap ? "Bear" : "—"
+    tf3FVGStatus  = tf3BullGap ? "Bull" : tf3BearGap ? "Bear" : "—"
     tf3CISDStatus = tf3CISDBull ? "Bull" : tf3CISDBear ? "Bear" : "—"
-    tf3Bias = tf3Close > tf3Open ? "Bullish" : "Bearish"
-    tf3BiasColor = tf3Close > tf3Open ? color.green : color.red
+    tf3Bias       = tf3Close > tf3Open ? "Bullish" : "Bearish"
+    tf3BiasColor  = tf3Close > tf3Open ? color.green : color.red
 
-    table.cell(mtfTable, 0, 3, tf3,          text_color=color.white, text_size=size.small)
-    table.cell(mtfTable, 1, 3, tf3FVGStatus, text_color=tf3FVGStatus == "Bull" ? color.green : tf3FVGStatus == "Bear" ? color.red : color.gray, text_size=size.small)
-    table.cell(mtfTable, 2, 3, tf3CISDStatus,text_color=tf3CISDStatus == "Bull" ? color.green : tf3CISDStatus == "Bear" ? color.red : color.gray, text_size=size.small)
-    table.cell(mtfTable, 3, 3, tf3Bias,      text_color=tf3BiasColor, text_size=size.small)
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ALERTS
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Multi-TF Confluence alerts
-allBullCISD = tf1CISDBull and tf2CISDBull and tf3CISDBull
-allBearCISD = tf1CISDBear and tf2CISDBear and tf3CISDBear
-
-alertcondition(allBullCISD, "All TFs Bullish CISD", "Bullish CISD confirmed on all 3 timeframes")
-alertcondition(allBearCISD, "All TFs Bearish CISD", "Bearish CISD confirmed on all 3 timeframes")
-alertcondition(tf1BullGap or tf2BullGap or tf3BullGap, "Bullish FVG (Any TF)", "Bullish FVG detected")
-alertcondition(tf1BearGap or tf2BearGap or tf3BearGap, "Bearish FVG (Any TF)", "Bearish FVG detected")
+    table.cell(mtfTable, 0, 3, tf3,           text_color=color.white, text_size=size.small)
+    table.cell(mtfTable, 1, 3, tf3FVGStatus,  text_color=tf3FVGStatus == "Bull" ? color.green : tf3FVGStatus == "Bear" ? color.red : color.gray, text_size=size.small)
+    table.cell(mtfTable, 2, 3, tf3CISDStatus, text_color=tf3CISDStatus == "Bull" ? color.green : tf3CISDStatus == "Bear" ? color.red : color.gray, text_size=size.small)
+    table.cell(mtfTable, 3, 3, tf3Bias,       text_color=tf3BiasColor, text_size=size.small)
+    table.cell(mtfTable, 4, 3, volStatus,     text_color=volClr, text_size=size.small)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BACKGROUND HIGHLIGHT ON MULTI-TF CONFLUENCE
@@ -335,3 +524,42 @@ anyBearConfluence = (tf1CISDBear and tf2CISDBear) or (tf2CISDBear and tf3CISDBea
 
 bgcolor(anyBullConfluence ? color.new(color.green, 92) : na, title="Multi-TF Bull Confluence")
 bgcolor(anyBearConfluence ? color.new(color.red, 92) : na, title="Multi-TF Bear Confluence")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALERTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+allBullCISD = tf1CISDBull and tf2CISDBull and tf3CISDBull
+allBearCISD = tf1CISDBear and tf2CISDBear and tf3CISDBear
+
+alertcondition(allBullCISD, "All TFs Bullish CISD", "Bullish CISD confirmed on all 3 timeframes")
+alertcondition(allBearCISD, "All TFs Bearish CISD", "Bearish CISD confirmed on all 3 timeframes")
+alertcondition(tf1BullGap or tf2BullGap or tf3BullGap, "Bullish FVG (Any TF)", "Bullish FVG detected")
+alertcondition(tf1BearGap or tf2BearGap or tf3BearGap, "Bearish FVG (Any TF)", "Bearish FVG detected")
+alertcondition(isBigCluster, "Big Volume Cluster", "Big volume cluster detected!")
+alertcondition(isBigCluster or isMedCluster, "Med+ Volume Cluster", "Medium or Big volume cluster detected!")
+alertcondition(isSmallCluster or isMedCluster or isBigCluster, "Any Volume Cluster", "Volume cluster detected!")
+
+// Confluence: CISD + Volume cluster
+alertcondition((tf1CISDBull or tf2CISDBull or tf3CISDBull) and (isBigCluster or isMedCluster), "Bull CISD + Volume", "Bullish CISD with elevated volume!")
+alertcondition((tf1CISDBear or tf2CISDBear or tf3CISDBear) and (isBigCluster or isMedCluster), "Bear CISD + Volume", "Bearish CISD with elevated volume!")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NO VOLUME WARNING
+// ─────────────────────────────────────────────────────────────────────────────
+
+var float cumVol = 0.0
+cumVol += nz(volume)
+
+var table warningBox = na
+
+if barstate.islast and cumVol == 0
+    if na(warningBox)
+        warningBox := table.new(position.middle_center, 1, 1, bgcolor=#ff0000)
+    table.cell(warningBox, 0, 0,
+         '\n  ⚠️  NO VOLUME DATA  ⚠️  \n\n  Volume Bubbles requires volume to function.  \n\n  Switch to a symbol that provides volume data.  \n',
+         text_color=chart.fg_color, text_size=size.large, bgcolor=#ff0000)
+else
+    if not na(warningBox)
+        table.delete(warningBox)
+        warningBox := na
